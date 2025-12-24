@@ -39,10 +39,21 @@ class TerminalScreen(carContext: CarContext) : Screen(carContext), DefaultLifecy
     private val handler = Handler(Looper.getMainLooper())
     private var refreshCounter = 0
 
+    // Buffer options
+    private val bufferSize = 200
+    private val buffer = java.util.ArrayDeque<String>(bufferSize)
+    
+    // TCP Server
+    private var serverSocket: java.net.ServerSocket? = null
+    private var serverThread: Thread? = null
+    @Volatile private var isRunning = false
+
     private val textPaint = Paint().apply {
         color = Color.WHITE
         typeface = Typeface.MONOSPACE
         isAntiAlias = true
+        // Fixed 15px text size per user request
+        textSize = 15f
     }
 
     private val bgPaint = Paint().apply {
@@ -50,31 +61,8 @@ class TerminalScreen(carContext: CarContext) : Screen(carContext), DefaultLifecy
         style = Paint.Style.FILL
     }
 
-    private val terminalContent: String
-        get() = buildString {
-            val width = 60
-            appendLine("╔${"═".repeat(width)}╗")
-            appendLine("║${"  AUTOTERM3 - DEBUG TERMINAL".padEnd(width)}║")
-            appendLine("╠${"═".repeat(width)}╣")
-            appendLine("║${" ".repeat(width)}║")
-            appendLine("║${"  Refresh Count: ${"%06d".format(refreshCounter)}".padEnd(width)}║")
-            appendLine("║${"  Timestamp: ${System.currentTimeMillis()}".padEnd(width)}║")
-            appendLine("║${" ".repeat(width)}║")
-            appendLine("╠${"═".repeat(width)}╣")
-            appendLine("║${"  SAMPLE OUTPUT:".padEnd(width)}║")
-            appendLine("║${"  $ ls -la /system/bin".padEnd(width)}║")
-            appendLine("║${"  drwxr-xr-x  2 root root  4096 Jan  1 00:00 .".padEnd(width)}║")
-            appendLine("║${"  drwxr-xr-x 17 root root  4096 Jan  1 00:00 ..".padEnd(width)}║")
-            appendLine("║${"  -rwxr-xr-x  1 root shell  123 Jan  1 00:00 sh".padEnd(width)}║")
-            appendLine("║${"  -rwxr-xr-x  1 root shell  456 Jan  1 00:00 ls".padEnd(width)}║")
-            appendLine("║${"  Memory: 2048 MB / 4096 MB (50%)".padEnd(width)}║")
-            appendLine("║${"  CPU: 23% | GPU: 12% | Temp: 42°C".padEnd(width)}║")
-            appendLine("╚${"═".repeat(width)}╝")
-        }
-
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            refreshCounter++
             renderToSurface()
             handler.postDelayed(this, REFRESH_INTERVAL_MS)
         }
@@ -86,9 +74,8 @@ class TerminalScreen(carContext: CarContext) : Screen(carContext), DefaultLifecy
             surface = container.surface
             surfaceWidth = container.width
             surfaceHeight = container.height
-            // Fixed 15px text size per user request
-            textPaint.textSize = 15f
-            Log.d(TAG, "Text size set to: ${textPaint.textSize}")
+            // Fixed 15px text size per user request, already set in paint
+            Log.d(TAG, "Text size: ${textPaint.textSize}")
             handler.post(refreshRunnable)
         }
 
@@ -107,20 +94,90 @@ class TerminalScreen(carContext: CarContext) : Screen(carContext), DefaultLifecy
         override fun onScale(focusX: Float, focusY: Float, scaleFactor: Float) {}
         override fun onFling(velocityX: Float, velocityY: Float) {}
     }
-
+    
+    // We don't need a default string anymore, but we can seed the buffer
     init {
         lifecycle.addObserver(this)
+        synchronized(buffer) {
+            buffer.add("AUTOTERM3 - LISTENING ON PORT 9000")
+            buffer.add("Type 'nc localhost 9000' (adb forward tcp:9000 tcp:9000)")
+            buffer.add("-------------------------------------------------------")
+        }
     }
     
     private var surfaceCallbackRegistered = false
 
     override fun onCreate(owner: LifecycleOwner) {
         Log.d(TAG, "Screen onCreate lifecycle")
+        startServer()
     }
 
     override fun onDestroy(owner: LifecycleOwner) {
         Log.d(TAG, "Screen destroyed")
+        stopServer()
         handler.removeCallbacks(refreshRunnable)
+    }
+
+    private fun startServer() {
+        if (isRunning) return
+        isRunning = true
+        serverThread = Thread {
+            try {
+                serverSocket = java.net.ServerSocket(9000)
+                Log.d(TAG, "Server started on port 9000")
+                while (isRunning) {
+                    try {
+                        val client = serverSocket?.accept()
+                        handleClient(client)
+                    } catch (e: Exception) {
+                        if (isRunning) Log.e(TAG, "Error accepting client", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Server error", e)
+            }
+        }.apply { start() }
+    }
+
+    private fun stopServer() {
+        isRunning = false
+        try {
+            serverSocket?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing server", e)
+        }
+        serverThread?.interrupt()
+    }
+
+    private fun handleClient(client: java.net.Socket?) {
+        client ?: return
+        Log.d(TAG, "Client connected: ${client.inetAddress}")
+        Thread {
+            try {
+                client.getInputStream().bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        addToBuffer(line!!)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Client connection error", e)
+            } finally {
+                try { client.close() } catch (e: Exception) {}
+                Log.d(TAG, "Client disconnected")
+            }
+        }.start()
+    }
+
+    private fun addToBuffer(line: String) {
+        synchronized(buffer) {
+            if (buffer.size >= bufferSize) {
+                buffer.pollFirst()
+            }
+            buffer.add(line)
+        }
+        // Force refresh immediately when data comes in
+        handler.post { renderToSurface() }
     }
 
     override fun onGetTemplate(): Template {
@@ -158,15 +215,21 @@ class TerminalScreen(carContext: CarContext) : Screen(carContext), DefaultLifecy
                 // Black background
                 canvas.drawRect(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat(), bgPaint)
 
-                // Draw text
+                // Render buffer from bottom up
                 val fm = textPaint.fontMetrics
                 val lineHeight = (fm.descent - fm.ascent) * 1.2f
-                var y = 20f - fm.ascent
-
-                for (line in terminalContent.lines()) {
-                    if (y > canvas.height) break
-                    canvas.drawText(line, 20f, y, textPaint)
-                    y += lineHeight
+                
+                // Start drawing from bottom of screen (minus some padding)
+                var y = canvas.height - 10f - fm.descent
+                
+                synchronized(buffer) {
+                    val iterator = buffer.descendingIterator()
+                    while (iterator.hasNext()) {
+                        val line = iterator.next()
+                        canvas.drawText(line, 20f, y, textPaint)
+                        y -= lineHeight
+                        if (y < 0 - lineHeight) break // Stop if we've gone off top
+                    }
                 }
             } finally {
                 s.unlockCanvasAndPost(canvas)

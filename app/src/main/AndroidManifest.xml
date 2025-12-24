@@ -4,6 +4,7 @@
 
     <!-- Required for foreground service (if we run commands later) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
     
     <!-- Required for NavigationTemplate (Surface access) -->
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES"/>

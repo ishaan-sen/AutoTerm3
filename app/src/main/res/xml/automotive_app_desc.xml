@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<automotiveApp>
+    <!-- Template is required for Car App Library apps -->
+    <uses name="template"/>
+</automotiveApp>

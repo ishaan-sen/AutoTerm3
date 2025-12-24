@@ -4,6 +4,10 @@
 
     <!-- Required for foreground service (if we run commands later) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    
+    <!-- Required for NavigationTemplate (Surface access) -->
+    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES"/>
+    <uses-permission android:name="androidx.car.app.ACCESS_SURFACE"/>
 
     <application
         android:allowBackup="true"
@@ -32,6 +36,7 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService"/>
+                <category android:name="androidx.car.app.category.NAVIGATION"/>
             </intent-filter>
         </service>
 

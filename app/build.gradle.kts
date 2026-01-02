@@ -9,8 +9,8 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.autoterm3"
-        minSdk = 34
+        applicationId = "com.isen.autoterm"
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
